@@ -37,7 +37,6 @@ jobs:
               out.write("\n".join(part) + "\n")
             chunk_files.append(fn)
 
-          # output list of chunk indices (1..k)
           idx = list(range(1, len(chunk_files)+1))
           print("Chunks:", idx)
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as gh:
@@ -107,25 +106,25 @@ jobs:
       - name: Upload chunk result
         uses: actions/upload-artifact@v4
         with:
-          name: results-parts
+          name: results-part-${{ matrix.chunk }}
           path: results_part_${{ matrix.chunk }}.csv
 
   merge:
     needs: run_chunks
     runs-on: ubuntu-latest
     steps:
-      - name: Download all parts
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
-          name: results-parts
           path: parts
 
       - name: Merge CSVs
         run: |
           python - <<'PY'
-          import glob, csv
+          import glob, csv, os
 
-          files = sorted(glob.glob("parts/results_part_*.csv"))
+          # Each artifact is downloaded into its own folder under parts/
+          files = sorted(glob.glob("parts/**/results_part_*.csv", recursive=True))
           if not files:
             raise SystemExit("No part CSVs found")
 

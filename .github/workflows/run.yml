@@ -3,7 +3,7 @@ name: Job expiry check (Playwright) - parallel
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 2 * * *"   # daily at 02:00 UTC
+    - cron: "0 1 * * *"   # daily at 01:00 UTC
 
 jobs:
   split:
@@ -110,6 +110,7 @@ jobs:
           path: results_part_${{ matrix.chunk }}.csv
 
   merge:
+    if: always()
     needs: run_chunks
     runs-on: ubuntu-latest
     steps:
@@ -121,9 +122,8 @@ jobs:
       - name: Merge CSVs
         run: |
           python - <<'PY'
-          import glob, csv, os
+          import glob, csv
 
-          # Each artifact is downloaded into its own folder under parts/
           files = sorted(glob.glob("parts/**/results_part_*.csv", recursive=True))
           if not files:
             raise SystemExit("No part CSVs found")

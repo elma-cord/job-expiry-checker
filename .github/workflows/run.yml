@@ -48,7 +48,6 @@ jobs:
             -t 25 \
             -b 300 \
             --pw-threads 2 \
-            --resume \
             --sheet-webhook ""
 
       - name: Upload results

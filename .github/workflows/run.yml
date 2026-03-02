@@ -3,7 +3,7 @@ name: Job expiry check (Playwright) - parallel
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 7 * * *"   # daily at 07:00 UTC
+    - cron: "0 8 * * *"   # daily at 08:00 UTC
 
 jobs:
   split:

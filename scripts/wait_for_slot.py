@@ -4,7 +4,7 @@ GitHub starts scheduled runs late (up to ~5.5h seen), so the crons fire
 ~4h early and this script holds the run until the window opens. If GitHub
 was so late that the window has already opened, it starts straight away.
 
-Usage: python wait_for_slot.py <morning|afternoon|now>
+Usage: python wait_for_slot.py <morning|midday|now>
 Writes run_date=YYYY-MM-DD and slot=<slot> to $GITHUB_OUTPUT.
 """
 import os
@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 LONDON = ZoneInfo("Europe/London")
-SLOT_START_HOUR = {"morning": 3, "afternoon": 15}
+SLOT_START_HOUR = {"morning": 3, "midday": 12}
 MAX_WAIT = timedelta(hours=5, minutes=30)
 
 

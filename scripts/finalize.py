@@ -3,10 +3,10 @@
 Inputs (current directory):
   parts/**/results_part_*.csv   checker output per chunk
   listings.json                 listings fetched from Cord at the start of the run
-  morning/run_results.csv       (afternoon only, optional) the morning run's results
+  morning/run_results.csv       (midday only, optional) the morning run's results
 
 Env:
-  SLOT              morning | afternoon | now
+  SLOT              morning | midday | now
   RUN_DATE          YYYY-MM-DD (UK)
   REMOVE_EXPIRED    "true" to actually remove; anything else = report-only
   MAX_REMOVE        safety cap per run (default 2000)
@@ -14,7 +14,7 @@ Env:
 Outputs:
   results.csv          same columns as before (for the Google Sheet)
   run_results.csv      one row per listing, with listing id, company, action
-  daily_summary.csv    afternoon only: removed today + still to check manually
+  daily_summary.csv    midday only: removed today + still to check manually
 """
 import csv
 import glob
@@ -170,7 +170,7 @@ def main():
     if not_checked:
         lines.append(f"- WARNING: {not_checked} listings had no result (a chunk may have failed)")
 
-    if SLOT == "afternoon":
+    if SLOT == "midday":
         n_removed, n_manual, had_morning = build_daily_summary(run_rows)
         lines.append(f"- Daily summary: {n_removed} removed today, {n_manual} to check manually"
                      + ("" if had_morning else " (morning results missing)"))

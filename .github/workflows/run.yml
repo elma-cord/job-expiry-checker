@@ -5,24 +5,24 @@ env:
 
 # Two checks a day, every day, in UK time:
 #   morning   03:00 UK start (window 03:00-06:00)
-#   afternoon 15:00 UK start (window 15:00-18:00)
+#   midday    12:00 UK start (done ~14:00)
 # GitHub starts scheduled runs late (up to ~5.5h seen), so each cron fires
 # ~4h early and the prepare job waits for the window to open.
 on:
   workflow_dispatch:
     inputs:
       slot:
-        description: "now = start immediately; morning/afternoon = behave like that scheduled run"
+        description: "now = start immediately; morning/midday = behave like that scheduled run"
         type: choice
-        options: [now, morning, afternoon]
+        options: [now, morning, midday]
         default: now
   schedule:
     - cron: "17 22 * * *"   # morning run (fires the evening before)
-    - cron: "17 10 * * *"   # afternoon run
+    - cron: "17 07 * * *"   # midday run
 
 permissions:
   contents: write   # keep-alive commit (GitHub disables schedules after 60 idle days)
-  actions: read     # afternoon run reads the morning run's results
+  actions: read     # midday run reads the morning run's results
 
 concurrency:
   group: job-expiry-check
@@ -49,7 +49,7 @@ jobs:
         run: |
           case "${{ github.event.schedule }}" in
             "17 22 * * *") echo "slot=morning" >> "$GITHUB_OUTPUT" ;;
-            "17 10 * * *") echo "slot=afternoon" >> "$GITHUB_OUTPUT" ;;
+            "17 07 * * *") echo "slot=midday" >> "$GITHUB_OUTPUT" ;;
             *) echo "slot=${{ inputs.slot || 'now' }}" >> "$GITHUB_OUTPUT" ;;
           esac
 
@@ -165,8 +165,8 @@ jobs:
           name: url-chunks
           path: .
 
-      - name: Download this morning's results (afternoon run only)
-        if: env.SLOT == 'afternoon'
+      - name: Download this morning's results (midday run only)
+        if: env.SLOT == 'midday'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -202,19 +202,19 @@ jobs:
           path: run_results.csv
 
       - name: Upload daily summary
-        if: always() && env.SLOT == 'afternoon'
+        if: always() && env.SLOT == 'midday'
         uses: actions/upload-artifact@v4
         with:
           name: daily-summary-${{ env.RUN_DATE }}
           path: daily_summary.csv
 
       - name: Keep the schedule alive
-        if: always() && env.SLOT == 'afternoon'
+        if: always() && env.SLOT == 'midday'
         run: |
           mkdir -p status
-          echo "{\"last_afternoon_run\": \"${RUN_DATE}\", \"run_id\": \"${GITHUB_RUN_ID}\"}" > status/last_run.json
+          echo "{\"last_midday_run\": \"${RUN_DATE}\", \"run_id\": \"${GITHUB_RUN_ID}\"}" > status/last_run.json
           git config user.name "github-actions[bot]"
           git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
           git add status/last_run.json
-          git commit -m "Record afternoon run ${RUN_DATE}" || exit 0
+          git commit -m "Record midday run ${RUN_DATE}" || exit 0
           git push

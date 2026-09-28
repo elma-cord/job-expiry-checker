@@ -1,0 +1,220 @@
+name: Job expiry check - automated from Cord
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+# Two checks a day, every day, in UK time:
+#   morning   03:00 UK start (window 03:00-06:00)
+#   midday    12:00 UK start (done ~14:00)
+# GitHub starts scheduled runs late (up to ~5.5h seen), so each cron fires
+# ~4h early and the prepare job waits for the window to open.
+on:
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "now = start immediately; morning/midday = behave like that scheduled run"
+        type: choice
+        options: [now, morning, midday]
+        default: now
+  schedule:
+    - cron: "17 22 * * *"   # morning run (fires the evening before)
+    - cron: "17 07 * * *"   # midday run
+
+permissions:
+  contents: write   # keep-alive commit (GitHub disables schedules after 60 idle days)
+  actions: read     # midday run reads the morning run's results
+
+concurrency:
+  group: job-expiry-check-cord
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    outputs:
+      chunks: ${{ steps.fetch.outputs.chunks }}
+      run_date: ${{ steps.wait.outputs.run_date }}
+      slot: ${{ steps.wait.outputs.slot }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Work out which run this is
+        id: which
+        run: |
+          case "${{ github.event.schedule }}" in
+            "17 22 * * *") echo "slot=morning" >> "$GITHUB_OUTPUT" ;;
+            "17 07 * * *") echo "slot=midday" >> "$GITHUB_OUTPUT" ;;
+            *) echo "slot=${{ inputs.slot || 'now' }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Wait for the window to open (UK time)
+        id: wait
+        run: python scripts/wait_for_slot.py "${{ steps.which.outputs.slot }}"
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Fetch external listings from Cord and split into chunks
+        id: fetch
+        env:
+          CORD_ADMIN_EMAIL: ${{ secrets.CORD_ADMIN_EMAIL }}
+          CORD_ADMIN_PASSWORD: ${{ secrets.CORD_ADMIN_PASSWORD }}
+        run: python scripts/fetch_listings.py
+
+      - name: Upload chunks and listings for other jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: url-chunks
+          path: |
+            chunks/
+            listings.json
+
+  run_chunks:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: ${{ fromJson(needs.prepare.outputs.chunks) }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download chunk files
+        uses: actions/download-artifact@v4
+        with:
+          name: url-chunks
+          path: .
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: |
+          python -m playwright install --with-deps chromium
+
+      - name: Run checker (this chunk)
+        run: |
+          python check_jobs.py chunks/job_url_part_${{ matrix.chunk }}.txt \
+            -o results_part_${{ matrix.chunk }}.csv \
+            -c 3 \
+            -t 25 \
+            -b 300 \
+            --pw-threads 2 \
+            --sheet-webhook ""
+
+      - name: Upload chunk result
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-part-${{ matrix.chunk }}
+          path: results_part_${{ matrix.chunk }}.csv
+
+  finalize:
+    if: always() && needs.prepare.result == 'success'
+    needs: [prepare, run_chunks]
+    runs-on: ubuntu-latest
+    env:
+      SLOT: ${{ needs.prepare.outputs.slot }}
+      RUN_DATE: ${{ needs.prepare.outputs.run_date }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install requests
+        run: pip install requests
+
+      - name: Download chunk results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: results-part-*
+          path: parts
+
+      - name: Download listings
+        uses: actions/download-artifact@v4
+        with:
+          name: url-chunks
+          path: .
+
+      - name: Download this morning's results (midday run only)
+        if: env.SLOT == 'midday'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=run-results-${RUN_DATE}-morning&per_page=5" \
+                 --jq '[.artifacts[] | select(.expired == false)][0].id // empty')
+          if [ -n "$id" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > morning.zip
+            unzip -o morning.zip -d morning
+          else
+            echo "No morning results found for ${RUN_DATE}"
+          fi
+
+      - name: Remove EXPIRED in Cord and build CSVs
+        env:
+          CORD_ADMIN_EMAIL: ${{ secrets.CORD_ADMIN_EMAIL }}
+          CORD_ADMIN_PASSWORD: ${{ secrets.CORD_ADMIN_PASSWORD }}
+          REMOVE_EXPIRED: ${{ vars.REMOVE_EXPIRED }}
+          MAX_REMOVE: ${{ vars.MAX_REMOVE }}
+        run: python scripts/finalize.py
+
+      - name: Upload results (same format as before)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results
+          path: results.csv
+
+      - name: Upload run results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-results-${{ env.RUN_DATE }}-${{ env.SLOT }}
+          path: run_results.csv
+
+      - name: Upload daily summary
+        if: always() && env.SLOT == 'midday'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-summary-${{ env.RUN_DATE }}
+          path: daily_summary.csv
+
+      - name: Keep the schedule alive
+        if: always() && env.SLOT == 'midday'
+        run: |
+          mkdir -p status
+          echo "{\"last_midday_run\": \"${RUN_DATE}\", \"run_id\": \"${GITHUB_RUN_ID}\"}" > status/last_run.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add status/last_run.json
+          git commit -m "Record midday run ${RUN_DATE}" || exit 0
+          git push

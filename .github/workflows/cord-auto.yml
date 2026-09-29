@@ -4,10 +4,14 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 # Two checks a day, every day, in UK time:
-#   morning   03:00 UK start (window 03:00-06:00)
-#   midday    12:00 UK start (done ~14:00)
-# GitHub starts scheduled runs late (up to ~5.5h seen), so each cron fires
-# ~4h early and the prepare job waits for the window to open.
+#   morning   03:00 UK start (done ~05:15)
+#   midday    12:00 UK start (done ~14:15)
+# Main trigger: an outside timer (cron-job.org) starts the run at the exact time
+# with slot=morning / slot=midday. GitHub's own crons below are only a backup:
+# GitHub often starts them hours late, so they fire ~4h early and wait for the
+# window. Whichever run for a slot starts first does the work; later ones skip.
+run-name: "Cord check: ${{ github.event_name == 'schedule' && (github.event.schedule == '17 22 * * *' && 'morning' || 'midday') || inputs.slot }}"
+
 on:
   workflow_dispatch:
     inputs:
@@ -33,6 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     outputs:
+      skip: ${{ steps.dedupe.outputs.skip }}
       chunks: ${{ steps.fetch.outputs.chunks }}
       run_date: ${{ steps.wait.outputs.run_date }}
       slot: ${{ steps.wait.outputs.slot }}
@@ -57,10 +62,30 @@ jobs:
         id: wait
         run: python scripts/wait_for_slot.py "${{ steps.which.outputs.slot }}"
 
+      - name: Skip if another run already covers this slot
+        id: dedupe
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SLOT: ${{ steps.wait.outputs.slot }}
+        run: |
+          if [ "$SLOT" = "now" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          since=$(date -u -d '-10 hours' +%Y-%m-%dT%H:%M:%SZ)
+          earlier=$(gh api --method GET "repos/${GITHUB_REPOSITORY}/actions/workflows/cord-auto.yml/runs" \
+            -f created=">=${since}" -f per_page=50 \
+            --jq "[.workflow_runs[] | select(.id < ${GITHUB_RUN_ID} and .display_title == \"Cord check: ${SLOT}\" and (.status != \"completed\" or .conclusion == \"success\"))] | length")
+          if [ "${earlier:-0}" -gt 0 ]; then
+            echo "An earlier ${SLOT} run already covers this slot, skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install requests
+        if: steps.dedupe.outputs.skip != 'true'
         run: pip install requests
 
       - name: Fetch external listings from Cord and split into chunks
+        if: steps.dedupe.outputs.skip != 'true'
         id: fetch
         env:
           CORD_ADMIN_EMAIL: ${{ secrets.CORD_ADMIN_EMAIL }}
@@ -68,6 +93,7 @@ jobs:
         run: python scripts/fetch_listings.py
 
       - name: Upload chunks and listings for other jobs
+        if: steps.dedupe.outputs.skip != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: url-chunks
@@ -77,6 +103,7 @@ jobs:
 
   run_chunks:
     needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 350
     strategy:
@@ -136,7 +163,7 @@ jobs:
           path: results_part_${{ matrix.chunk }}.csv
 
   finalize:
-    if: always() && needs.prepare.result == 'success'
+    if: always() && needs.prepare.result == 'success' && needs.prepare.outputs.skip != 'true'
     needs: [prepare, run_chunks]
     runs-on: ubuntu-latest
     env:

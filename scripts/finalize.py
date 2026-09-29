@@ -172,7 +172,7 @@ def main():
 
     if SLOT == "midday":
         n_removed, n_manual, had_morning = build_daily_summary(run_rows)
-        lines.append(f"- Daily summary: {n_removed} removed today, {n_manual} to check manually"
+        lines.append(f"- Daily summary: {n_removed} {'removed' if REMOVE else 'would be removed'} today, {n_manual} to check manually"
                      + ("" if had_morning else " (morning results missing)"))
 
     report = "\n".join(lines)

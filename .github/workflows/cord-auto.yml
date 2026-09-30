@@ -26,7 +26,7 @@ on:
 
 permissions:
   contents: write   # keep-alive commit (GitHub disables schedules after 60 idle days)
-  actions: read     # midday run reads the morning run's results
+  actions: write    # midday run reads the morning run's results; a duplicate run cancels itself
 
 concurrency:
   group: job-expiry-check-cord
@@ -74,8 +74,11 @@ jobs:
             -f created=">=${since}" -f per_page=50 \
             --jq "[.workflow_runs[] | select(.id < ${GITHUB_RUN_ID} and .display_title == \"Cord check: ${SLOT}\" and (.status != \"completed\" or .conclusion == \"success\"))] | length")
           if [ "${earlier:-0}" -gt 0 ]; then
-            echo "An earlier ${SLOT} run already covers this slot, skipping."
+            echo "An earlier ${SLOT} run already covers this slot, cancelling this one."
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            # Show as grey "Cancelled" so the run that did the work is the only green one.
+            gh run cancel "${GITHUB_RUN_ID}" -R "${GITHUB_REPOSITORY}" || true
+            sleep 60
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi

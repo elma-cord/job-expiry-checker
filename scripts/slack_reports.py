@@ -59,7 +59,8 @@ def new_reports():
     while True:
         d = slack("conversations.history", channel=CHANNEL, oldest=oldest, limit=15, **({"cursor": cursor} if cursor else {}))
         msgs += d.get("messages", [])
-        print(f"    Slack returned {len(d.get('messages', []))} messages", flush=True)
+        print(f"    Slack returned {len(d.get('messages', []))} messages | "
+              + json.dumps({k: v for k, v in d.items() if k != "messages"})[:300], flush=True)
         cursor = (d.get("response_metadata") or {}).get("next_cursor")
         if not cursor:
             break

@@ -54,7 +54,7 @@ def slack(method, http="get", **params):
 
 
 def new_reports():
-    oldest = str(time.time() - LOOKBACK_H * 3600)
+    oldest = f"{time.time() - LOOKBACK_H * 3600:.6f}"  # Slack wants exactly 6 decimals
     msgs, cursor = [], None
     while True:
         d = slack("conversations.history", channel=CHANNEL, oldest=oldest, limit=15, **({"cursor": cursor} if cursor else {}))

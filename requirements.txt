@@ -3,3 +3,5 @@ beautifulsoup4
 lxml
 playwright
 requests
+anthropic==0.125.0
+pypdf

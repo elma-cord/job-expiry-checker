@@ -1,0 +1,87 @@
+name: Slack expiry reports
+
+# Second expiry agent (Elma, 16 Nov 2026): every ~10 minutes, check the jobs candidates reported as expired in
+# Slack #position-ops-reports (scripts/slack_reports.py). Expired: removed in cord + :white_check_mark:.
+# Still active: :a:. Not an external job: :eyes:. Unsure / link broken: no reaction, checked again later.
+# Needs the SLACK_BOT_TOKEN secret; until it is set every run just ends. Switch off: repo variable SLACK_REPORTS=off.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Check only: no removal, no reactions"
+        type: boolean
+        default: true
+  push:
+    branches: [slack-reports]   # test runs from the review branch are always dry runs
+    paths: ["scripts/slack_reports.py", ".github/workflows/slack-reports.yml"]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: slack-expiry-reports
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: vars.SLACK_REPORTS != 'off'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      DRY_RUN: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true') || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+      - name: Install Python dependencies
+        run: pip install -q -r requirements.txt
+      - name: Get the state of earlier runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=slack-reports-state&per_page=5" \
+                 --jq '[.artifacts[] | select(.expired == false)][0].id // empty')
+          if [ -n "$id" ] && [ "$DRY_RUN" != "true" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > s.zip && unzip -o -q s.zip
+          fi
+          [ -f state.json ] || echo '{}' > state.json
+      - name: Any new reports?
+        id: count
+        run: python scripts/slack_reports.py --count
+      - name: Cache Playwright browsers
+        if: steps.count.outputs.reports != '' && steps.count.outputs.reports != '0'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('requirements.txt') }}
+      - name: Install the browser
+        if: steps.count.outputs.reports != '' && steps.count.outputs.reports != '0'
+        run: python -m playwright install --with-deps chromium
+      - name: Check the reported jobs
+        if: steps.count.outputs.reports != '' && steps.count.outputs.reports != '0'
+        env:
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          CONTEXTDEV_KEY: ${{ secrets.CONTEXTDEV_KEY }}
+          CORD_ADMIN_EMAIL: ${{ secrets.CORD_ADMIN_EMAIL }}
+          CORD_ADMIN_PASSWORD: ${{ secrets.CORD_ADMIN_PASSWORD }}
+          CTX_CAP: "20"
+          THREADS: "2"
+        run: python scripts/slack_reports.py
+      - name: Save the state for the next run
+        if: always() && env.DRY_RUN != 'true' && steps.count.outputs.reports != '' && steps.count.outputs.reports != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: slack-reports-state
+          path: state.json
+          retention-days: 7

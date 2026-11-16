@@ -61,8 +61,11 @@ def new_reports():
     for m in msgs:
         if m.get("reactions"):
             continue  # someone (a person or this agent) already handled it
-        text = m.get("text", "") + " " + json.dumps(m.get("blocks", []))
+        text = " ".join([m.get("text", ""), json.dumps(m.get("blocks", []), ensure_ascii=False),
+                         json.dumps(m.get("attachments", []), ensure_ascii=False)])
         g = REPORT.search(m.get("text", "")) or REPORT.search(text)
+        if not g and DRY and m.get("subtype") != "channel_join":
+            print("    (dry run) message not read as a report:", repr(text[:400]))
         if g:
             out.append({"ts": m["ts"], "id": g.group("id"), "title": html.unescape(g.group("title").strip()), "company": html.unescape(g.group("company").strip())})
     return sorted(out, key=lambda x: float(x["ts"]))

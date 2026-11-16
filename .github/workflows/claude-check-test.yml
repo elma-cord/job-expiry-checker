@@ -1,0 +1,78 @@
+name: Claude check - test (no removals)
+
+# Test of the Claude check on GitHub's machines, started by hand. It takes the newest finished cord run's
+# CHECK_MANUALLY jobs, checks up to <jobs> of them with Claude and builds the report. It never logs in to cord and
+# never removes anything (REMOVE_EXPIRED is forced off). It does write to the "Claude check" tab when the sheet
+# secrets are set, and uploads its own artifacts (not named claude-memory, so the real runs never read them).
+
+on:
+  push:
+    branches: [claude-check]   # a push to the review branch runs the test (60 jobs, no sheet)
+    paths: ["scripts/claude_check.py", "scripts/finalize.py", ".github/workflows/claude-check-test.yml"]
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: "How many CHECK_MANUALLY jobs to check"
+        default: "60"
+      write_sheet:
+        description: "Also write the answers to the Claude check tab"
+        type: boolean
+        default: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Get the newest finished cord run's results
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/cord-auto.yml/runs?status=success&per_page=5" --jq '.workflow_runs[0].id')
+          echo "Using cord run $run"
+          for name in url-chunks results-part-1; do
+            id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run}/artifacts" --jq ".artifacts[] | select(.name==\"$name\") | .id")
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > a.zip && unzip -o -q a.zip -d in && rm a.zip
+          done
+          ls in
+      - name: Claude check
+        env:
+          ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_KEY }}
+          CONTEXTDEV_KEY: ${{ secrets.CONTEXTDEV_KEY }}
+          SLOT: morning
+          CLAUDE_LIMIT: ${{ inputs.jobs || '60' }}
+          CTX_CAP: "60"
+        run: |
+          mkdir -p claude/x parts/x
+          cp in/results_part_1.csv parts/x/
+          python scripts/claude_check.py in/results_part_1.csv in/listings.json - claude/x/claude_part_1.json
+      - name: Report (no removals)
+        env:
+          SLOT: morning
+          RUN_DATE: test
+          REMOVE_EXPIRED: "false"
+          CLAUDE_REMOVE: "false"
+          SHEET_WEBHOOK_URL: ${{ inputs.write_sheet == true && secrets.SHEET_WEBHOOK_URL || '' }}
+          SHEET_WEBHOOK_TOKEN: ${{ secrets.SHEET_WEBHOOK_TOKEN }}
+        run: |
+          cp in/listings.json .
+          python scripts/finalize.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: claude-test-results
+          path: |
+            claude/x/claude_part_1.json
+            claude_check.csv

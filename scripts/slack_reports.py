@@ -41,7 +41,12 @@ def slack(method, http="get", **params):
     token = os.environ["SLACK_BOT_TOKEN"].strip()
     url = f"https://slack.com/api/{method}"
     hdr = {"Authorization": f"Bearer {token}"}
-    r = requests.post(url, headers=hdr, json=params, timeout=60) if http == "post" else requests.get(url, headers=hdr, params=params, timeout=60)
+    for _ in range(4):
+        r = requests.post(url, headers=hdr, json=params, timeout=60) if http == "post" else requests.get(url, headers=hdr, params=params, timeout=60)
+        if r.status_code == 429:  # Slack limits new apps to about 1 history read a minute
+            time.sleep(int(r.headers.get("Retry-After", "60")) + 1)
+            continue
+        break
     d = r.json()
     if not d.get("ok") and d.get("error") != "already_reacted":
         raise RuntimeError(f"Slack {method}: {d.get('error')}")
@@ -52,8 +57,9 @@ def new_reports():
     oldest = str(time.time() - LOOKBACK_H * 3600)
     msgs, cursor = [], None
     while True:
-        d = slack("conversations.history", channel=CHANNEL, oldest=oldest, limit=200, **({"cursor": cursor} if cursor else {}))
+        d = slack("conversations.history", channel=CHANNEL, oldest=oldest, limit=15, **({"cursor": cursor} if cursor else {}))
         msgs += d.get("messages", [])
+        print(f"    Slack returned {len(d.get('messages', []))} messages", flush=True)
         cursor = (d.get("response_metadata") or {}).get("next_cursor")
         if not cursor:
             break
@@ -83,7 +89,12 @@ def main():
         print("SLACK_BOT_TOKEN is not set yet: nothing to do.")
         return
     state = json.load(open("state.json")) if os.path.exists("state.json") else {}
-    reports = [r for r in new_reports()
+    if "--count" not in sys.argv and os.path.exists("reports.json"):
+        found = json.load(open("reports.json"))  # read by the "Any new reports?" step of this run
+    else:
+        found = new_reports()
+        json.dump(found, open("reports.json", "w"))
+    reports = [r for r in found
                if state.get(r["ts"], {}).get("tries", 0) < MAX_TRIES
                and time.time() - state.get(r["ts"], {}).get("last", 0) >= RETRY_GAP_S]
     print(f"{datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC | reports to check: {len(reports)}{' | DRY RUN' if DRY else ''}")

@@ -75,3 +75,14 @@ def bulk_delete(session, listing_ids):
         timeout=120,
     )
     return resp.status_code
+
+
+def refresh_all_last_checked(session):
+    """Same as the admin "Refresh last checked" button: sets last checked to now
+    on every external, not-deleted position. Returns the HTTP status code."""
+    resp = session.patch(
+        f"{BASE_URL}/api/v2/admin/external-listings/refresh-all-last-checked",
+        json={},
+        timeout=300,
+    )
+    return resp.status_code

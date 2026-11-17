@@ -264,6 +264,7 @@ jobs:
           MAX_REMOVE: ${{ vars.MAX_REMOVE }}
           CLAUDE_REMOVE: ${{ vars.CLAUDE_REMOVE }}
           CLAUDE_MAX_REMOVE: ${{ vars.CLAUDE_MAX_REMOVE }}
+          REFRESH_LAST_CHECKED: ${{ vars.REFRESH_LAST_CHECKED }}
           SHEET_WEBHOOK_URL: ${{ secrets.SHEET_WEBHOOK_URL }}
           SHEET_WEBHOOK_TOKEN: ${{ secrets.SHEET_WEBHOOK_TOKEN }}
         run: python scripts/finalize.py

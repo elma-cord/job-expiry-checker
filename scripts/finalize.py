@@ -40,6 +40,9 @@ REMOVE = os.environ.get("REMOVE_EXPIRED", "").strip().lower() == "true"
 MAX_REMOVE = int(os.environ.get("MAX_REMOVE") or 2000)
 CLAUDE_REMOVE = os.environ.get("CLAUDE_REMOVE", "").strip().lower() == "true"
 CLAUDE_MAX_REMOVE = int(os.environ.get("CLAUDE_MAX_REMOVE") or 300)
+# Elma 17 Nov 2026: press admin "Refresh last checked" after every finished check.
+# Repo variable REFRESH_LAST_CHECKED=off turns it off.
+REFRESH_LAST_CHECKED = os.environ.get("REFRESH_LAST_CHECKED", "").strip().lower() != "off"
 MEMORY_DAYS = 7
 BATCH = 200
 
@@ -169,6 +172,25 @@ def build_daily_summary(today_rows):
     return len(removed), len(manual), bool(morning)
 
 
+def refresh_last_checked(not_checked, failed):
+    """Refresh "last checked" on all external positions, only when the whole check finished."""
+    if not REFRESH_LAST_CHECKED:
+        return "refresh turned off (REFRESH_LAST_CHECKED=off)"
+    if not_checked:
+        return f"NOT refreshed, {not_checked} listings were not checked"
+    if failed:
+        return "NOT refreshed, removing expired jobs did not fully work"
+    try:
+        status = cord_api.refresh_all_last_checked(cord_api.login())
+    except SystemExit as e:
+        return f"NOT refreshed, {e}"
+    except Exception as e:
+        return f"NOT refreshed, {type(e).__name__}"
+    if status < 400:
+        return "refreshed for all external positions"
+    return f"NOT refreshed, Cord answered HTTP {status}"
+
+
 def main():
     with open("listings.json", encoding="utf-8") as f:
         listings = json.load(f)
@@ -284,6 +306,8 @@ def main():
         n_removed, n_manual, had_morning = build_daily_summary(run_rows)
         lines.append(f"- Daily summary: {n_removed} {'removed' if REMOVE else 'would be removed'} today, {n_manual} to check manually"
                      + ("" if had_morning else " (morning results missing)"))
+
+    lines.append(f"- Last checked: {refresh_last_checked(not_checked, failed)}")
 
     report = "\n".join(lines)
     print(report)

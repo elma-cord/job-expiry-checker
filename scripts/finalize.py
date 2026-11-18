@@ -18,7 +18,8 @@ Env:
 
 Claude check (Elma, 16 Nov 2026; scripts/claude_check.py): claude/**/claude_part_*.json holds Claude's answer for each
 CHECK_MANUALLY link; memory.json the answers of the last days. Hard proof (404 / gone from the job system) is removed
-at once; Claude's EXPIRED is removed at midday after a second EXPIRED (CONFIRMED); LINK_BROKEN is never removed.
+at once; Claude's EXPIRED from the morning is removed at midday after a second EXPIRED (CONFIRMED); a job first seen
+at midday is removed on its one EXPIRED (Elma 18 Nov 2026); LINK_BROKEN is never removed.
 
 Outputs:
   results.csv          same columns as before (for the Google Sheet)
@@ -90,7 +91,13 @@ def claude_action(c):
     if st == "EXPIRED":
         if c.get("confirm") == "CONFIRMED":
             return "REMOVE"
-        return "WAIT_MIDDAY" if SLOT == "morning" else "CHECK_MANUALLY"  # a manual run has no second check
+        if SLOT == "morning":
+            return "WAIT_MIDDAY"  # looked at again at midday; a second EXPIRED confirms it
+        if SLOT == "midday" and not c.get("confirm"):
+            # Elma 18 Nov 2026: a job Claude sees for the first time at midday has no later check, so Claude's
+            # EXPIRED is trusted and removed (before, these ~90 a day went to Manual check as "unsure").
+            return "REMOVE"
+        return "CHECK_MANUALLY"  # a manual run has no second check
     if st == "LINK_BROKEN":
         return "LINK_BROKEN"
     if st == "ACTIVE":

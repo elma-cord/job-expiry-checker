@@ -11,8 +11,10 @@ Env:
   REMOVE_EXPIRED    "true" to actually remove; anything else = report-only
   MAX_REMOVE        safety cap per run (default 2000)
   CLAUDE_REMOVE     "true" to also remove the jobs the Claude check found expired (default: shadow mode, nothing)
-  CLAUDE_MAX_REMOVE safety cap for Claude removals per run (default 300)
-  SHEET_WEBHOOK_URL / SHEET_WEBHOOK_TOKEN  Apps Script that writes the Claude answers to the sheet (optional)
+  CLAUDE_MAX_REMOVE safety cap for Claude removals per run (default 600; above it Claude removes nothing that run)
+  SHEET_WEBHOOK_URL / SHEET_WEBHOOK_TOKEN  Apps Script (apps_script/expiry_sheets.gs) that, after the midday run,
+                    adds the jobs still to check to "Manual check" and the day's removed count to the data table
+                    (Expired roles, row 16). Optional.
 
 Claude check (Elma, 16 Nov 2026; scripts/claude_check.py): claude/**/claude_part_*.json holds Claude's answer for each
 CHECK_MANUALLY link; memory.json the answers of the last days. Hard proof (404 / gone from the job system) is removed
@@ -39,7 +41,7 @@ RUN_DATE = os.environ.get("RUN_DATE", "")
 REMOVE = os.environ.get("REMOVE_EXPIRED", "").strip().lower() == "true"
 MAX_REMOVE = int(os.environ.get("MAX_REMOVE") or 2000)
 CLAUDE_REMOVE = os.environ.get("CLAUDE_REMOVE", "").strip().lower() == "true"
-CLAUDE_MAX_REMOVE = int(os.environ.get("CLAUDE_MAX_REMOVE") or 300)
+CLAUDE_MAX_REMOVE = int(os.environ.get("CLAUDE_MAX_REMOVE") or 600)
 # Elma 17 Nov 2026: press admin "Refresh last checked" after every finished check.
 # Repo variable REFRESH_LAST_CHECKED=off turns it off.
 REFRESH_LAST_CHECKED = os.environ.get("REFRESH_LAST_CHECKED", "").strip().lower() != "off"
@@ -52,6 +54,7 @@ RUN_FIELDS = ["listing_id", "company_id", "company_name", "position", "url", "do
               "claude_status", "claude_reason", "claude_source", "claude_action"]
 CLAUDE_FIELDS = ["date", "run", "listing_id", "company_name", "position", "url", "claude_status", "claude_reason",
                  "claude_source", "claude_action", "your_check"]
+MANUAL_FIELDS = ["listing_id", "position", "url", "claude_status"]
 SUMMARY_FIELDS = ["listing_id", "company_name", "position", "url", "domain", "action",
                   "run", "times_flagged", "evidence", "reason", "checked_at"]
 
@@ -113,15 +116,32 @@ def save_memory(claude):
     return len(keep)
 
 
-def push_to_sheet(rows):
+def manual_check_rows(today_rows):
+    """Elma 18 Nov 2026: after the midday run, every job still to check by hand goes to the "Manual check" tab:
+    Claude unsure (or no Claude answer) and LINK BROKEN. Claude's ACTIVE (keep) is trusted when CLAUDE_REMOVE is on,
+    and removed jobs are already gone."""
+    out, seen = [], set()
+    for r in sorted(today_rows, key=lambda r: (r["domain"], r["company_name"])):
+        if r["status"] != "CHECK_MANUALLY" or r["action"] == "REMOVED" or r["listing_id"] in seen:
+            continue
+        if CLAUDE_REMOVE and r.get("claude_action") == "KEEP":
+            continue
+        seen.add(r["listing_id"])
+        out.append({"listing_id": r["listing_id"], "position": r["position"], "url": r["url"],
+                    "claude_status": "link broken" if r.get("claude_action") == "LINK_BROKEN" else "unsure"})
+    return out
+
+
+def push_to_sheets(n_removed, manual):
+    """Midday only: Manual check rows + the day's removed count for the data table (Apps Script expiry_sheets.gs)."""
     url = os.environ.get("SHEET_WEBHOOK_URL", "").strip()
-    if not url or not rows:
-        return "not set" if not url else "nothing to write"
+    if not url:
+        return "not set"
     try:
-        body = {"token": os.environ.get("SHEET_WEBHOOK_TOKEN", ""), "tab": "Claude check", "header": CLAUDE_FIELDS,
-                "rows": [[r.get(k, "") for k in CLAUDE_FIELDS] for r in rows]}
-        resp = requests.post(url, json=body, timeout=120)
-        return f"HTTP {resp.status_code}: {resp.text[:120]}"
+        body = {"token": os.environ.get("SHEET_WEBHOOK_TOKEN", ""), "action": "daily", "date": RUN_DATE,
+                "removed": n_removed, "manual_rows": [[r[k] for k in MANUAL_FIELDS] for r in manual]}
+        resp = requests.post(url, json=body, timeout=180)
+        return f"HTTP {resp.status_code}: {resp.text[:200]}"
     except Exception as e:  # noqa: BLE001
         return f"failed: {type(e).__name__}"
 
@@ -299,13 +319,18 @@ def main():
                        "claude_action": ("WOULD " + r["claude_action"]) if (not CLAUDE_REMOVE and r["claude_action"] == "REMOVE")
                        else r["claude_action"], "your_check": ""}
                       for r in with_claude if not (SLOT == "midday" and "reused: this morning" in r["claude_source"])]
-        write_csv("claude_check.csv", CLAUDE_FIELDS, sheet_rows)
-        lines.append(f"- Claude memory: {save_memory(claude)} links | sheet: {push_to_sheet(sheet_rows)}")
+        write_csv("claude_check.csv", CLAUDE_FIELDS, sheet_rows)  # kept as a run file; no longer sent to the sheet
+        lines.append(f"- Claude memory: {save_memory(claude)} links")
 
     if SLOT == "midday":
         n_removed, n_manual, had_morning = build_daily_summary(run_rows)
         lines.append(f"- Daily summary: {n_removed} {'removed' if REMOVE else 'would be removed'} today, {n_manual} to check manually"
                      + ("" if had_morning else " (morning results missing)"))
+        manual = manual_check_rows(run_rows)
+        write_csv("manual_check.csv", MANUAL_FIELDS, manual)
+        sheet_removed = n_removed if REMOVE else 0
+        lines.append(f"- Sheets: {len(manual)} jobs for Manual check, {sheet_removed} removed for the data table | "
+                     f"{push_to_sheets(sheet_removed, manual)}")
 
     lines.append(f"- Last checked: {refresh_last_checked(not_checked, failed)}")
 

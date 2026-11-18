@@ -3,10 +3,10 @@
  *
  * After the midday run, GitHub (scripts/finalize.py) posts once a day:
  *   {token, action: "daily", date: "YYYY-MM-DD", removed: <GitHub + Claude removed today>,
- *    manual_rows: [[listing_id, position, url, claude_status], ...]}
+ *    manual_rows: [[listing_id, position, url, claude_status, claude_reason, claude_source], ...]}
  * and this script
- *   1. adds the manual_rows under the last row of the "Manual check" tab (this spreadsheet), columns A-D only;
- *      column E "expired or not?" is Elma's and is never written;
+ *   1. adds the manual_rows under the last row of the "Manual check" tab (this spreadsheet), columns A-F only;
+ *      column G "expired or not?" is Elma's and is never written;
  *   2. writes the removed count to row 16 ("Checked on Github") of the "Expired roles" tab in
  *      "PositionOps & Commercial team Data", in the column whose row-1 header ends with the date ("Wednesday 18/11").
  *      Saturday and Sunday have no column: their numbers are added to the following Monday's cell
@@ -18,6 +18,7 @@
  * allow access to your spreadsheets (it now also writes to the data table). The URL and TOKEN stay the same.
  */
 var MANUAL_TAB = 'Manual check';
+var WIDTH = 6;  // A-F: listing_id, position, url, claude_status, claude_reason, claude_source
 var DATA_SPREADSHEET_ID = '1bGozWzF1fTS_NdGgULHqnGONdBpGOkTYaQJhcuNbb7Q';  // PositionOps & Commercial team Data
 var DATA_TAB = 'Expired roles';
 var DATA_ROW = 16;  // "Checked on Github"
@@ -41,14 +42,14 @@ function doPost(e) {
       result.manual = 'already added for this date';
     } else {
       var rows = (d.manual_rows || []).map(function (r) {
-        return r.slice(0, 4).map(text_);
+        return r.slice(0, WIDTH).concat(['', '', '', '', '', '']).slice(0, WIDTH).map(text_);
       });
       if (rows.length) {
         var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(MANUAL_TAB);
         if (!sh) return out_({ok: false, error: 'no ' + MANUAL_TAB + ' tab'});
         var last = lastRowInA_(sh);
         if (sh.getMaxRows() < last + rows.length) sh.insertRowsAfter(sh.getMaxRows(), last + rows.length - sh.getMaxRows());
-        sh.getRange(last + 1, 1, rows.length, 4).setValues(rows);
+        sh.getRange(last + 1, 1, rows.length, WIDTH).setValues(rows);
       }
       props.setProperty(doneKey, '1');
       result.manual = rows.length + ' rows added';

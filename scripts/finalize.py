@@ -54,7 +54,7 @@ RUN_FIELDS = ["listing_id", "company_id", "company_name", "position", "url", "do
               "claude_status", "claude_reason", "claude_source", "claude_action"]
 CLAUDE_FIELDS = ["date", "run", "listing_id", "company_name", "position", "url", "claude_status", "claude_reason",
                  "claude_source", "claude_action", "your_check"]
-MANUAL_FIELDS = ["listing_id", "position", "url", "claude_status"]
+MANUAL_FIELDS = ["listing_id", "position", "url", "claude_status", "claude_reason", "claude_source"]
 SUMMARY_FIELDS = ["listing_id", "company_name", "position", "url", "domain", "action",
                   "run", "times_flagged", "evidence", "reason", "checked_at"]
 
@@ -128,7 +128,8 @@ def manual_check_rows(today_rows):
             continue
         seen.add(r["listing_id"])
         out.append({"listing_id": r["listing_id"], "position": r["position"], "url": r["url"],
-                    "claude_status": "link broken" if r.get("claude_action") == "LINK_BROKEN" else "unsure"})
+                    "claude_status": "link broken" if r.get("claude_action") == "LINK_BROKEN" else "unsure",
+                    "claude_reason": r.get("claude_reason", ""), "claude_source": r.get("claude_source", "")})
     return out
 
 

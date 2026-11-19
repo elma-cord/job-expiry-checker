@@ -11,6 +11,9 @@
  *      "PositionOps & Commercial team Data", in the column whose row-1 header ends with the date ("Wednesday 18/11").
  *      Saturday and Sunday have no column: their numbers are added to the following Monday's cell
  *      (Monday's cell = Saturday + Sunday + Monday).
+ *   3. (19 Nov 2026) writes old_removed (jobs posted more than 3 months ago, removed in the morning run) to row 20
+ *      ("Positions posted more than 3 months ago") of the same tab, same column and weekend rule. When old_removed is
+ *      null (the morning step did not run), row 20 is left as it is.
  * The same date posted twice (a re-run) does not add the Manual check rows again and does not double the count.
  *
  * Set up (Elma): in the "Expired jobs checker" spreadsheet, Extensions > Apps Script, replace the old code with this
@@ -22,6 +25,7 @@ var WIDTH = 6;  // A-F: listing_id, position, url, claude_status, claude_reason,
 var DATA_SPREADSHEET_ID = '1bGozWzF1fTS_NdGgULHqnGONdBpGOkTYaQJhcuNbb7Q';  // PositionOps & Commercial team Data
 var DATA_TAB = 'Expired roles';
 var DATA_ROW = 16;  // "Checked on Github"
+var OLD_ROW = 20;   // "Positions posted more than 3 months ago" (19 Nov 2026)
 var KEEP_DAYS = 21;
 
 function doPost(e) {
@@ -55,22 +59,13 @@ function doPost(e) {
       result.manual = rows.length + ' rows added';
     }
 
-    // 2. Removed count -> data table (weekend days go to the next Monday)
-    props.setProperty('removed_' + d.date, String(Number(d.removed) || 0));
-    var target = targetDay_(d.date);
-    var total = 0;
-    for (var i = 0; i < 3; i++) {  // the target day and up to two days before it (Sat, Sun for a Monday)
-      var day = addDays_(target, -i);
-      if (i > 0 && targetDay_(day) !== target) break;
-      total += Number(props.getProperty('removed_' + day) || 0);
-    }
+    // 2. Removed count -> data table row 16; 3. 3-months-old removals -> row 20 (weekend days go to the next Monday)
     var data = SpreadsheetApp.openById(DATA_SPREADSHEET_ID).getSheetByName(DATA_TAB);
-    var col = findColumn_(data, target);
-    if (col) {
-      data.getRange(DATA_ROW, col).setValue(total);
-      result.data_table = total + ' written to ' + data.getRange(DATA_ROW, col).getA1Notation() + ' (' + target + ')';
+    result.data_table = writeCount_(props, data, 'removed_', d.date, d.removed, DATA_ROW);
+    if (d.old_removed !== null && d.old_removed !== undefined && d.old_removed !== '') {
+      result.old_jobs = writeCount_(props, data, 'old_', d.date, d.old_removed, OLD_ROW);
     } else {
-      result.data_table = 'no column for ' + target + ' yet; ' + total + ' kept and written when that column exists';
+      result.old_jobs = 'not sent (morning step did not run), row ' + OLD_ROW + ' left as it is';
     }
 
     cleanup_(props, d.date);
@@ -78,6 +73,22 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// Saves the day's number, adds up the target day and its weekend days, and writes the total to `row`.
+function writeCount_(props, data, prefix, iso, value, row) {
+  props.setProperty(prefix + iso, String(Number(value) || 0));
+  var target = targetDay_(iso);
+  var total = 0;
+  for (var i = 0; i < 3; i++) {  // the target day and up to two days before it (Sat, Sun for a Monday)
+    var day = addDays_(target, -i);
+    if (i > 0 && targetDay_(day) !== target) break;
+    total += Number(props.getProperty(prefix + day) || 0);
+  }
+  var col = findColumn_(data, target);
+  if (!col) return 'no column for ' + target + ' yet; ' + total + ' kept and written when that column exists';
+  data.getRange(row, col).setValue(total);
+  return total + ' written to ' + data.getRange(row, col).getA1Notation() + ' (' + target + ')';
 }
 
 // Weekend dates count for the following Monday.
@@ -116,7 +127,7 @@ function cleanup_(props, today) {
   var all = props.getProperties();
   var cutoff = addDays_(today, -KEEP_DAYS);
   Object.keys(all).forEach(function (k) {
-    var m = k.match(/^(manual|removed)_(\d{4}-\d{2}-\d{2})$/);
+    var m = k.match(/^(manual|removed|old)_(\d{4}-\d{2}-\d{2})$/);
     if (m && m[2] < cutoff) props.deleteProperty(k);
   });
 }

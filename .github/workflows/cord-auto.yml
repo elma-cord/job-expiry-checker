@@ -87,6 +87,30 @@ jobs:
         if: steps.dedupe.outputs.skip != 'true'
         run: pip install requests
 
+      # Elma, 19 Nov 2026: remove external jobs posted more than 3 months ago (scripts/old_jobs.py), morning run only,
+      # before the listings are fetched. Max 2000 (more = nothing removed). Repo variable OLD_JOBS=off switches it off.
+      # It can never stop the expiry check.
+      - name: Remove jobs posted more than 3 months ago (morning only)
+        if: steps.dedupe.outputs.skip != 'true' && steps.wait.outputs.slot == 'morning'
+        continue-on-error: true
+        env:
+          CORD_ADMIN_EMAIL: ${{ secrets.CORD_ADMIN_EMAIL }}
+          CORD_ADMIN_PASSWORD: ${{ secrets.CORD_ADMIN_PASSWORD }}
+          RUN_DATE: ${{ steps.wait.outputs.run_date }}
+          OLD_JOBS: ${{ vars.OLD_JOBS }}
+          OLD_JOBS_MAX: ${{ vars.OLD_JOBS_MAX }}
+        run: python scripts/old_jobs.py
+
+      - name: Upload the 3-months-old removals (read by the midday run)
+        if: steps.dedupe.outputs.skip != 'true' && steps.wait.outputs.slot == 'morning'
+        uses: actions/upload-artifact@v4
+        with:
+          name: old-jobs-${{ steps.wait.outputs.run_date }}
+          path: |
+            old_jobs.json
+            old_jobs_removed.csv
+          if-no-files-found: ignore
+
       - name: Fetch external listings from Cord and split into chunks
         if: steps.dedupe.outputs.skip != 'true'
         id: fetch
@@ -254,6 +278,21 @@ jobs:
             unzip -o morning.zip -d morning
           else
             echo "No morning results found for ${RUN_DATE}"
+          fi
+
+      - name: Download this morning's 3-months-old removals (midday run only)
+        if: env.SLOT == 'midday'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          id=$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=old-jobs-${RUN_DATE}&per_page=5" \
+                 --jq '[.artifacts[] | select(.expired == false)][0].id // empty')
+          if [ -n "$id" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${id}/zip" > old.zip
+            unzip -o old.zip -d morning_old && cat morning_old/old_jobs.json
+          else
+            echo "No 3-months-old removals found for ${RUN_DATE}"
           fi
 
       - name: Remove EXPIRED in Cord and build CSVs

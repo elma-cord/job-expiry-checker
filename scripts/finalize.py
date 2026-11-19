@@ -140,14 +140,27 @@ def manual_check_rows(today_rows):
     return out
 
 
+def old_jobs_removed():
+    """19 Nov 2026: this morning's "posted more than 3 months ago" removals (scripts/old_jobs.py), for row 20.
+    None when the morning step did not run or removed nothing on purpose (switched off, over the limit)."""
+    try:
+        with open("morning_old/old_jobs.json", encoding="utf-8") as f:
+            r = json.load(f)
+        return r.get("removed") if r.get("date") == RUN_DATE else None
+    except (OSError, ValueError):
+        return None
+
+
 def push_to_sheets(n_removed, manual):
-    """Midday only: Manual check rows + the day's removed count for the data table (Apps Script expiry_sheets.gs)."""
+    """Midday only: Manual check rows + the day's removed count for the data table (Apps Script expiry_sheets.gs),
+    and (19 Nov) this morning's 3-months-old removals for row 20."""
     url = os.environ.get("SHEET_WEBHOOK_URL", "").strip()
     if not url:
         return "not set"
     try:
         body = {"token": os.environ.get("SHEET_WEBHOOK_TOKEN", ""), "action": "daily", "date": RUN_DATE,
-                "removed": n_removed, "manual_rows": [[r[k] for k in MANUAL_FIELDS] for r in manual]}
+                "removed": n_removed, "old_removed": old_jobs_removed(),
+                "manual_rows": [[r[k] for k in MANUAL_FIELDS] for r in manual]}
         resp = requests.post(url, json=body, timeout=180)
         return f"HTTP {resp.status_code}: {resp.text[:200]}"
     except Exception as e:  # noqa: BLE001

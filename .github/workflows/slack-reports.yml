@@ -3,6 +3,7 @@ name: Slack expiry reports
 # Second expiry agent (Elma, 16 Nov 2026): every ~10 minutes, check the jobs candidates reported as expired in
 # Slack #position-ops-reports (scripts/slack_reports.py). Expired: removed in cord + :white_check_mark:.
 # Still active: :a:. Not an external job: :eyes:. Unsure / link broken: no reaction, checked again later.
+# 20 Nov: 2+ different candidates report the same job within 24 hours: removed even if live, :two:/:three:... + :white_check_mark:.
 # Needs the SLACK_BOT_TOKEN secret; until it is set every run just ends. Switch off: repo variable SLACK_REPORTS=off.
 
 on:

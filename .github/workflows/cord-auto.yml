@@ -155,7 +155,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # GitHub sometimes can't find an artifact for a few seconds right after it was
+      # uploaded ("No artifacts found for ID"). Try again after a short wait instead of
+      # failing the whole part (25 Nov: part 1 stopped after 5 seconds this way).
       - name: Download chunk files
+        id: dlchunks1
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: url-chunks
+          path: .
+      - name: Download chunk files (retry after 20s)
+        id: dlchunks2
+        if: steps.dlchunks1.outcome == 'failure'
+        continue-on-error: true
+        run: sleep 20
+      - name: Download chunk files (second try)
+        if: steps.dlchunks1.outcome == 'failure'
+        id: dlchunks2b
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: url-chunks
+          path: .
+      - name: Download chunk files (last try after 60s)
+        if: steps.dlchunks1.outcome == 'failure' && steps.dlchunks2b.outcome == 'failure'
+        run: sleep 60
+      - name: Download chunk files (third try)
+        if: steps.dlchunks1.outcome == 'failure' && steps.dlchunks2b.outcome == 'failure'
         uses: actions/download-artifact@v4
         with:
           name: url-chunks
@@ -252,7 +279,35 @@ jobs:
           pattern: results-part-*
           path: parts
 
+      # GitHub sometimes can't find an artifact for a few seconds right after it was
+      # uploaded ("No artifacts found for ID"). Try again after a short wait instead of
+      # failing the whole part (25 Nov: part 1 stopped after 5 seconds this way).
       - name: Download listings
+        id: dllist1
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: url-chunks
+          path: .
+
+      - name: Download listings (retry after 20s)
+        id: dllist2
+        if: steps.dllist1.outcome == 'failure'
+        continue-on-error: true
+        run: sleep 20
+      - name: Download listings (second try)
+        if: steps.dllist1.outcome == 'failure'
+        id: dllist2b
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: url-chunks
+          path: .
+      - name: Download listings (last try after 60s)
+        if: steps.dllist1.outcome == 'failure' && steps.dllist2b.outcome == 'failure'
+        run: sleep 60
+      - name: Download listings (third try)
+        if: steps.dllist1.outcome == 'failure' && steps.dllist2b.outcome == 'failure'
         uses: actions/download-artifact@v4
         with:
           name: url-chunks

@@ -342,10 +342,22 @@ def _detect_redirect_to_listing(original_url, final_url):
     try:
         orig_parsed = urlparse(original_url.strip().rstrip("/"))
         final_parsed = urlparse(final_url.strip().rstrip("/"))
-        if orig_parsed.netloc.lower() != final_parsed.netloc.lower():
-            return False
         orig_path = orig_parsed.path.rstrip("/").lower()
         final_path = final_parsed.path.rstrip("/").lower()
+        if orig_parsed.netloc.lower() != final_parsed.netloc.lower():
+            # 26 Nov 2026: ParentPay's closed Pinpoint job (parentpaygroup.pinpointhq.com/en/postings/<id>) sends you to
+            # careers.parentpaygroup.com, the careers home, which has job text and Apply buttons, so it was read as ACTIVE.
+            # A link with a job id that lands on another site's home page (at most one path part, no job id at all in
+            # the new link, not a login page) is a redirect away from the job. A new job id means the job moved
+            # (Flexjet hrmdirect -> apply.clearcompany.com/flexjetuk?jobId=<uuid> is still open), so that is kept.
+            id_re = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|\d{4,}"
+            ids = re.findall(id_re, (orig_parsed.path + "?" + orig_parsed.query).lower())
+            final_all = final_url.lower()
+            if (ids and not re.search(id_re, final_all)
+                    and len([x for x in final_path.split("/") if x]) <= 1
+                    and not re.search(r"log-?in|sign-?in|auth|sso|account|consent|cookie|captcha", final_all)):
+                return True
+            return False
         if orig_path == final_path:
             return False
         if len(final_path) < len(orig_path) and orig_path.startswith(final_path):

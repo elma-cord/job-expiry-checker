@@ -233,8 +233,17 @@ def job_system(url):
         return None
     m = re.match(r"https?://(?:jobs|careers)\.smartrecruiters\.com/([^/]+)/(\d+)", u)
     if m:
-        st, _ = get(f"https://api.smartrecruiters.com/v1/companies/{m.group(1)}/postings/{m.group(2)}")
-        return ("LISTED", "SmartRecruiters lists the job") if st == 200 else ("EXPIRED", f"SmartRecruiters job not found (HTTP {st})") if st in (404, 410) else None
+        st, body = get(f"https://api.smartrecruiters.com/v1/companies/{m.group(1)}/postings/{m.group(2)}")
+        if st == 200:
+            # the API also returns closed postings, with "active": false (26 Nov 2026: Wise, Primark... were read as listed)
+            try:
+                active = json.loads(body).get("active")
+            except ValueError:
+                return None
+            if active is False:
+                return "EXPIRED", "SmartRecruiters says the job is no longer active"
+            return ("LISTED", "SmartRecruiters lists the job") if active is True else None
+        return ("EXPIRED", f"SmartRecruiters job not found (HTTP {st})") if st in (404, 410) else None
     m = re.match(r"https?://(?:job-boards|boards)\.(?:eu\.)?greenhouse\.io/([^/]+)/jobs/(\d+)", u)
     gh = [(m.group(1), m.group(2))] if m else []
     if not gh:

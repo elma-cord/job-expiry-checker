@@ -2,7 +2,9 @@
 
 Every ~10 minutes this reads the channel's new report messages, for example
   "2026-11-16 17:00:43 | production | Full Stack Developer (497808) by LCP reported by Bogdan (...)"
-and checks the reported job's link with the same Claude check as the expiry checker (scripts/claude_check.py):
+and checks the reported job's link the same way as the twice-daily expiry run (Elma, 26 Nov 2026: "it needs to use the
+same rules"): first the rule checker (check_jobs.py: 404/410, redirected to the careers list, closed wording, apply-by
+date in the past, apply + job body), then, only when the rules say CHECK_MANUALLY, the Claude check (claude_check.py):
   * EXPIRED (404 / gone from the job system / a clear closed notice): the job is removed in cord admin
     (External positions, bulk delete) and the message gets :white_check_mark:
   * ACTIVE (the advert is shown at our link): not removed, the message gets :a:
@@ -104,6 +106,38 @@ def unreact(ts, name):
         slack("reactions.remove", http="post", channel=CHANNEL, timestamp=ts, name=name)
     except RuntimeError as e:
         print(f"    could not remove :{name}: ({e})")
+
+
+def rule_check(url):
+    """Step 1 of the twice-daily run for one link: check_jobs.check_one, same browser rules and headers.
+    Returns (EXPIRED | ACTIVE | CHECK_MANUALLY, evidence)."""
+    import asyncio
+    import aiohttp
+    from concurrent.futures import ThreadPoolExecutor
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # check_jobs.py is at the repo root
+    import check_jobs as R
+
+    async def run():
+        ex = ThreadPoolExecutor(max_workers=1)
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                 "Chrome/124.0.0.0 Safari/537.36",
+                   "Accept-Language": "en-US,en;q=0.9",
+                   "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"}
+        try:
+            async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=False, force_close=True),
+                                             headers=headers) as session:
+                return await R.check_one(url, session, ex, 25, {"done": 0, "total": 1})
+        finally:
+            try:
+                ex.submit(R._close_thread_browser).result(timeout=10)
+            except Exception:
+                pass
+            ex.shutdown(wait=False)
+    try:
+        res = asyncio.run(run())
+        return res["status"], f"{res['evidence']}: {res['reason']}"
+    except Exception as e:  # the rule step failing must not stop the Claude step
+        return "CHECK_MANUALLY", f"rule check failed ({type(e).__name__})"
 
 
 def multi_groups(found):
@@ -213,7 +247,14 @@ def main():
                 lines.append(f"- {label}: not a live external job, :eyes:")
                 continue
             url = listing["externalURL"].strip()
-            res = CC.decide(url, listing.get("positionName") or r["title"])
+            rule, evidence = rule_check(url)
+            if rule == "EXPIRED":
+                res = {"status": "EXPIRED", "reason": evidence, "how": "rules, as in the twice-daily run"}
+            elif rule == "ACTIVE":
+                res = {"status": "ACTIVE", "reason": evidence, "how": "rules, as in the twice-daily run"}
+            else:
+                res = CC.decide(url, listing.get("positionName") or r["title"])
+                res["how"] = f"{res['how']}; rules said: {evidence}"
             st.update(tries=st["tries"] + 1, last=time.time(), result=res["status"], reason=res["reason"])
             print(f"- {label}: {res['status']} - {res['reason']} ({res['how']}) | {url}")
             if res["status"] == "EXPIRED":

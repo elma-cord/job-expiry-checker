@@ -161,6 +161,15 @@ def get(url, timeout=25):
         return 0, b""
 
 
+def final_url(url, timeout=25):
+    req = urllib.request.Request(url, headers={"User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.geturl()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def pdf_text(url):
     st, data = get(url, 40)
     if st != 200 or not data:
@@ -196,7 +205,7 @@ def context_dev(url):
 # ---------------------------------------------------------------- the job system's own data
 
 def job_system(url):
-    """("EXPIRED"|"LISTED", reason) from the job system's data, or None. LISTED never makes a job active by itself:
+    """("EXPIRED"|"LISTED"|"OWN_PAGE", reason) from the job system's data, or None. LISTED never makes a job active by itself:
     it only stops Claude's EXPIRED (safety net)."""
     u = url.strip()
     m = re.match(r"https?://([^.]+)\.(wd\d+)\.myworkdayjobs\.com/(?:[a-z]{2}-[A-Z]{2}/)?([^/]+)/job/(.+?)(?:\?.*)?$", u)
@@ -248,6 +257,38 @@ def job_system(url):
                 s3, _ = get(f"https://{host}/v1/boards/{board}/jobs")
                 if s3 == 200:
                     return "EXPIRED", "not on the company's Greenhouse board any more"
+    # 26 Nov 2026: Workable and Pinpoint. The Slack agent left Bionic (Workable, job gone: link redirects to
+    # ?not_found=true) and ParentPay (Pinpoint, job gone from the board) as "link broken", and Nasstar (Pinpoint,
+    # still on the board and its advert shown at our link) as "link broken" too.
+    m = re.match(r"https?://apply\.workable\.com/(?:([^/]+)/)?j/([0-9A-Fa-f]{6,12})", u)
+    if m:
+        acct, code = m.group(1), m.group(2).upper()
+        if not acct:  # short link: the redirect names the account (or says not_found)
+            fin = final_url(u)
+            if "not_found=true" in fin:
+                return "EXPIRED", "Workable says the job was not found (the link goes to the careers page with not_found)"
+            am = re.match(r"https?://apply\.workable\.com/([^/?]+)/", fin)
+            acct = am.group(1) if am else None
+        if acct:
+            st, _ = get(f"https://apply.workable.com/api/v2/accounts/{acct}/jobs/{code}")
+            if st == 200:
+                return "OWN_PAGE", "Workable lists the job and our link is its own page"
+            if st == 404:
+                return "EXPIRED", "not on the company's Workable job board any more"
+        return None
+    m = re.match(r"https?://([a-z0-9-]+)\.pinpointhq\.com/(?:[a-z]{2}(?:-[A-Z]{2})?/)?postings/([0-9a-f-]{36})", u)
+    if m:
+        st, body = get(f"https://{m.group(1)}.pinpointhq.com/postings.json")
+        if st == 200:
+            try:
+                posts = json.loads(body).get("data", [])
+            except ValueError:
+                return None
+            if posts and any(m.group(2) in (p.get("url") or p.get("path") or "") for p in posts):
+                return "OWN_PAGE", "Pinpoint lists the job and our link is its own page"
+            if posts:
+                return "EXPIRED", "not on the company's Pinpoint job board any more"
+        return None
     m = re.search(r"[?&]ashby_jid=([0-9a-f-]{36})", u)
     if m:
         st, html = get(u)
@@ -354,8 +395,12 @@ def finish(r, how, js, h):
     status, reason = r.get("status", "unsure").upper(), r.get("reason", "")
     if status == "EXPIRED" and MENU_ONLY.search(reason):  # a page with only menus: the advert may not have loaded
         status, reason = "UNSURE", "page showed only site menus: " + reason
-    if status == "EXPIRED" and js and js[0] == "LISTED":  # safety net
+    if status == "EXPIRED" and js and js[0] in ("LISTED", "OWN_PAGE"):  # safety net
         status, reason = "UNSURE", f"{js[1]}, but the page did not show it: " + reason
+    elif status in ("LINK_BROKEN", "UNSURE") and js and js[0] == "OWN_PAGE":
+        # the job system itself says our link is this open job's own page, so a candidate sees the advert there
+        # (Nasstar 26 Nov: Claude read Pinpoint's careers list around the advert as "link broken")
+        status, reason = "ACTIVE", f"{js[1]} ({reason})"
     return {"status": status, "reason": reason, "how": how, "hard": False, "hash": h}
 
 
